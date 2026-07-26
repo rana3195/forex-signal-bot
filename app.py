@@ -9,12 +9,14 @@ CORS(app)
 DEFAULT_API_KEY = "a592dba7321442efa229bee2b8a1cff8"
 API_KEY = os.environ.get("TWELVE_DATA_API_KEY", DEFAULT_API_KEY)
 
-# =========================================================
+# ===========# ===================================================
 # 🔒 APPROVED USERS & PASSWORDS LIST
-# =========================================================
+# ===================================================
 APPROVED_USERS = {
-    "ranadigitalhub555@gmail.com": "user1234"
+    "ranadigitalhub555@gmail.com": "user1234",
+    "irfanghauri052@gmail.com": "user1234"
 }
+
 
 @app.route('/')
 def home():
