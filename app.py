@@ -174,12 +174,12 @@ def analyze():
         action_type = "PUT"
         
     elif (latest_rsi < 35) and macd_bullish:
-        signal = "WEAK CALL 🟢 (Waiting for BB Bounce)"
+        signal = "WEAK CALL 🟢"
         confidence = "MEDIUM"
         action_type = "CALL"
 
     elif (latest_rsi > 65) and macd_bearish:
-        signal = "WEAK PUT 🔴 (Waiting for BB Rejection)"
+        signal = "WEAK PUT 🔴"
         confidence = "MEDIUM"
         action_type = "PUT"
 
