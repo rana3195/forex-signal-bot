@@ -1,15 +1,22 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
+import pandas as pd
+import numpy as np
 import os
 
 app = Flask(__name__)
 CORS(app)
 
-TWELVE_DATA_KEY = os.environ.get("TWELVE_DATA_API_KEY", "a592dba7321442efa229bee2b8a1cff8")
-FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "d9jm151r01qr77bn79sgd9jm151r01qr77bn79t0")
-ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_API_KEY", "I21UDS2THP8Z1CWN")
+# ===================================================
+# 🔑 TWELVE DATA DUAL API KEYS
+# ===================================================
+KEY_PRIMARY = os.environ.get("TWELVE_DATA_KEY_1", "a592dba7321442efa229bee2b8a1cff8")
+KEY_SECONDARY = os.environ.get("TWELVE_DATA_KEY_2", "5f98e9f032684d27b8b266656bfcadac")
 
+# ===================================================
+# 🔒 APPROVED USERS & PASSWORDS LIST
+# ===================================================
 APPROVED_USERS = {
     "ranadigitalhub555@gmail.com": "user1234",
     "irfanghauri052@gmail.com": "user1234"
@@ -17,8 +24,11 @@ APPROVED_USERS = {
 
 @app.route('/')
 def home():
-    return "Forex Pro Server is Live! 🚀"
+    return "Forex Pro Live Signal Server is Running Perfectly! 🚀"
 
+# ---------------------------------------------------------
+# 🔑 LOGIN ROUTE
+# ---------------------------------------------------------
 @app.route('/login', methods=['POST'])
 def login():
     try:
@@ -27,33 +37,40 @@ def login():
         password = data.get("password", "").strip()
 
         if email in APPROVED_USERS and APPROVED_USERS[email] == password:
-            return jsonify({"status": "success", "message": "Access Granted!"}), 200
-        return jsonify({"status": "error", "message": "Invalid Credentials"}), 401
+            return jsonify({
+                "status": "success",
+                "message": "Access Granted! Welcome to Forex Signals."
+            }), 200
+        else:
+            return jsonify({
+                "status": "error",
+                "message": "Access Denied: Email approved nahi hai ya password galat hai."
+            }), 401
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
-# Local Safe Calculator
-def calculate_from_prices(price_list):
-    import pandas as pd
-    import numpy as np
-    
+# ---------------------------------------------------------
+# 🧮 FAST LOCAL INDICATOR CALCULATOR
+# ---------------------------------------------------------
+def calculate_local_indicators(price_list):
     df = pd.DataFrame({'close': price_list})
     close = df['close']
     
-    # RSI
+    # 1. RSI (14)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     
-    # MACD
+    # 2. MACD (12, 26, 9)
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     macd_line = exp1 - exp2
     macd_signal = macd_line.ewm(span=9, adjust=False).mean()
     
-    # Bollinger Bands
+    # 3. Bollinger Bands (20, 2)
     middle_band = close.rolling(window=20).mean()
     std = close.rolling(window=20).std()
     upper_band = middle_band + (std * 2)
@@ -70,80 +87,58 @@ def calculate_from_prices(price_list):
         "lower_band": float(lower_band.iloc[-1] if not np.isnan(lower_band.iloc[-1]) else close.iloc[-1])
     }
 
-def get_market_data_safe(coin, timeframe):
-    # --- 1. TWELVEDATA (1 Fast Call) ---
-    try:
-        url = f"https://api.twelvedata.com/time_series?symbol={coin}&interval={timeframe}&outputsize=35&apikey={TWELVE_DATA_KEY}"
-        res = requests.get(url, timeout=2.5).json()
-        if "values" in res and len(res["values"]) > 20:
-            prices = [float(x['close']) for x in reversed(res['values'])]
-            return calculate_from_prices(prices)
-    except Exception as e:
-        print("TwelveData Fail:", e)
+# ---------------------------------------------------------
+# 🌐 DUAL TWELVEDATA FETCH LOGIC
+# ---------------------------------------------------------
+def get_twelvedata_candles(coin, timeframe, api_key):
+    url = f"https://api.twelvedata.com/time_series?symbol={coin}&interval={timeframe}&outputsize=40&apikey={api_key}"
+    res = requests.get(url, timeout=3.5).json()
+    
+    if "values" in res and len(res["values"]) > 20:
+        # Reversing list so oldest is first, newest is last
+        prices = [float(x['close']) for x in reversed(res['values'])]
+        return prices
+    return None
 
-    # --- 2. FINNHUB ---
+def fetch_market_data(coin, timeframe):
+    # 1️⃣ TRY PRIMARY KEY
     try:
-        import time
-        fh_symbol = "OANDA:" + coin.replace("/", "_")
-        if "XAU" in coin: fh_symbol = "OANDA:XAU_USD"
-        
-        tf_map = {'1min': '1', '5min': '5', '15min': '15', '1h': '60'}
-        res_tf = tf_map.get(timeframe, '1')
-        
-        to_t = int(time.time())
-        from_t = to_t - 3600 * 6
-        
-        url = f"https://finnhub.io/api/v1/forex/candle?symbol={fh_symbol}&resolution={res_tf}&from={from_t}&to={to_t}&token={FINNHUB_KEY}"
-        res = requests.get(url, timeout=2.5).json()
-        
-        if res.get('s') == 'ok' and len(res.get('c', [])) > 20:
-            prices = [float(x) for x in res['c']]
-            return calculate_from_prices(prices)
+        prices = get_twelvedata_candles(coin, timeframe, KEY_PRIMARY)
+        if prices:
+            print("🟢 Fetched using Primary TwelveData Key")
+            return calculate_local_indicators(prices)
+        else:
+            print("⚠️ Primary Key limit hit, switching to Secondary Key...")
     except Exception as e:
-        print("Finnhub Fail:", e)
+        print(f"⚠️ Primary Key Error: {e}")
 
-    # --- 3. ALPHA VANTAGE ---
+    # 2️⃣ TRY SECONDARY KEY (FALLBACK)
     try:
-        pair = coin.split('/')
-        av_url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={pair[0]}&to_symbol={pair[1]}&interval={timeframe}&apikey={ALPHA_VANTAGE_KEY}"
-        res = requests.get(av_url, timeout=2.5).json()
-        key = f"Time Series FX ({timeframe})"
-        if key in res:
-            raw_data = res[key]
-            prices = [float(v['4. close']) for k, v in list(raw_data.items())[:35]][::-1]
-            if len(prices) > 20:
-                return calculate_from_prices(prices)
+        prices = get_twelvedata_candles(coin, timeframe, KEY_SECONDARY)
+        if prices:
+            print("🟡 Fetched using Secondary TwelveData Key")
+            return calculate_local_indicators(prices)
+        else:
+            print("⚠️ Secondary Key limit hit or empty data.")
     except Exception as e:
-        print("Alpha Vantage Fail:", e)
-
-    # --- 4. YAHOO FINANCE (ALWAYS WORKS AS LAST RESORT) ---
-    try:
-        import yfinance as yf
-        yf_symbol = coin.replace("/", "") + "=X"
-        if "XAU" in coin: yf_symbol = "GC=F"
-
-        df = yf.download(tickers=yf_symbol, period="1d", interval=timeframe, progress=False)
-        if not df.empty:
-            prices = df['Close'].values.flatten().tolist()
-            prices = [float(x) for x in prices if not float('nan') == x][-35:]
-            if len(prices) > 20:
-                return calculate_from_prices(prices)
-    except Exception as e:
-        print("Yahoo Finance Fail:", e)
+        print(f"⚠️ Secondary Key Error: {e}")
 
     return None
 
+# ---------------------------------------------------------
+# 📊 STRATEGY ROUTE
+# ---------------------------------------------------------
 @app.route('/analyze', methods=['GET'])
 def analyze():
     coin = request.args.get('coin', 'EUR/USD')
     timeframe = request.args.get('timeframe', '1min')
     
-    data = get_market_data_safe(coin, timeframe)
+    data = fetch_market_data(coin, timeframe)
     
     if data is None:
         return jsonify({
             "status": "error",
-            "message": "All API endpoints and Fallbacks failed. Check connection."
+            "message": "Dono TwelveData Keys ki limits exhaust ho chuki hain. Baki time bad try karein."
         }), 500
 
     latest_price = data['price']
@@ -155,27 +150,36 @@ def analyze():
     upper_band = data['upper_band']
     lower_band = data['lower_band']
 
+    # Strategy Logic Conditions
     macd_bullish = (prev_macd_line <= prev_macd_signal) and (macd_line > macd_signal)
     macd_bearish = (prev_macd_line >= prev_macd_signal) and (macd_line < macd_signal)
+    
+    price_at_lower_band = latest_price <= lower_band
+    price_at_upper_band = latest_price >= upper_band
 
     signal = "WAIT (NEUTRAL) 🟡"
     confidence = "LOW"
     action_type = "NO_ACTION"
 
-    if (latest_rsi < 35) and macd_bullish:
-        signal = "STRONG CALL 🟢"
+    # --- CALL LOGIC ---
+    if (latest_rsi < 30) and macd_bullish and price_at_lower_band:
+        signal = "STRONG CALL 🟢 (RSI + MACD + BB Bounce)"
         confidence = "HIGH"
         action_type = "CALL"
-    elif (latest_rsi > 65) and macd_bearish:
-        signal = "STRONG PUT 🔴"
+
+    # --- PUT LOGIC ---
+    elif (latest_rsi > 70) and macd_bearish and price_at_upper_band:
+        signal = "STRONG PUT 🔴 (RSI + MACD + BB Rejection)"
         confidence = "HIGH"
         action_type = "PUT"
-    elif latest_rsi < 40:
-        signal = "WEAK CALL 🟢"
+        
+    elif (latest_rsi < 35) and macd_bullish:
+        signal = "WEAK CALL 🟢 (Waiting for BB Bounce)"
         confidence = "MEDIUM"
         action_type = "CALL"
-    elif latest_rsi > 60:
-        signal = "WEAK PUT 🔴"
+
+    elif (latest_rsi > 65) and macd_bearish:
+        signal = "WEAK PUT 🔴 (Waiting for BB Rejection)"
         confidence = "MEDIUM"
         action_type = "PUT"
 
@@ -186,7 +190,10 @@ def analyze():
         "current_price": round(latest_price, 5),
         "indicators": {
             "rsi": latest_rsi,
-            "macd_line": round(macd_line, 5)
+            "macd_line": round(macd_line, 5),
+            "macd_signal": round(macd_signal, 5),
+            "bb_upper": round(upper_band, 5),
+            "bb_lower": round(lower_band, 5)
         },
         "signal": signal,
         "action": action_type,
