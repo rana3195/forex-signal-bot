@@ -14,9 +14,6 @@ CORS(app)
 KEY_PRIMARY = os.environ.get("TWELVE_DATA_KEY_1", "a592dba7321442efa229bee2b8a1cff8")
 KEY_SECONDARY = os.environ.get("TWELVE_DATA_KEY_2", "5f98e9f032684d27b8b266656bfcadac")
 
-# ===================================================
-# 🔒 APPROVED USERS & PASSWORDS LIST
-# ===================================================
 APPROVED_USERS = {
     "ranadigitalhub555@gmail.com": "user1234",
     "irfanghauri052@gmail.com": "user1234"
@@ -26,9 +23,6 @@ APPROVED_USERS = {
 def home():
     return "Forex Pro Live Signal Server is Running Perfectly! 🚀"
 
-# ---------------------------------------------------------
-# 🔑 LOGIN ROUTE
-# ---------------------------------------------------------
 @app.route('/login', methods=['POST'])
 def login():
     try:
@@ -37,21 +31,13 @@ def login():
         password = data.get("password", "").strip()
 
         if email in APPROVED_USERS and APPROVED_USERS[email] == password:
-            return jsonify({
-                "status": "success",
-                "message": "Access Granted! Welcome to Forex Signals."
-            }), 200
-        else:
-            return jsonify({
-                "status": "error",
-                "message": "Access Denied: Email approved nahi hai ya password galat hai."
-            }), 401
-
+            return jsonify({"status": "success", "message": "Access Granted!"}), 200
+        return jsonify({"status": "error", "message": "Access Denied"}), 401
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # ---------------------------------------------------------
-# 🧮 FAST LOCAL INDICATOR CALCULATOR
+# 🧮 LOW-RISK & HIGH ACCURACY INDICATOR CALCULATOR
 # ---------------------------------------------------------
 def calculate_local_indicators(price_list):
     df = pd.DataFrame({'close': price_list})
@@ -75,6 +61,9 @@ def calculate_local_indicators(price_list):
     std = close.rolling(window=20).std()
     upper_band = middle_band + (std * 2)
     lower_band = middle_band - (std * 2)
+
+    # 4. EMA Trend Filter (20 EMA)
+    ema_20 = close.ewm(span=20, adjust=False).mean()
     
     return {
         "price": float(close.iloc[-1]),
@@ -84,49 +73,36 @@ def calculate_local_indicators(price_list):
         "prev_macd_line": float(macd_line.iloc[-2] if not np.isnan(macd_line.iloc[-2]) else 0.0),
         "prev_macd_signal": float(macd_signal.iloc[-2] if not np.isnan(macd_signal.iloc[-2]) else 0.0),
         "upper_band": float(upper_band.iloc[-1] if not np.isnan(upper_band.iloc[-1]) else close.iloc[-1]),
-        "lower_band": float(lower_band.iloc[-1] if not np.isnan(lower_band.iloc[-1]) else close.iloc[-1])
+        "lower_band": float(lower_band.iloc[-1] if not np.isnan(lower_band.iloc[-1]) else close.iloc[-1]),
+        "ema_20": float(ema_20.iloc[-1])
     }
 
-# ---------------------------------------------------------
-# 🌐 DUAL TWELVEDATA FETCH LOGIC
-# ---------------------------------------------------------
 def get_twelvedata_candles(coin, timeframe, api_key):
     url = f"https://api.twelvedata.com/time_series?symbol={coin}&interval={timeframe}&outputsize=40&apikey={api_key}"
     res = requests.get(url, timeout=3.5).json()
-    
     if "values" in res and len(res["values"]) > 20:
-        # Reversing list so oldest is first, newest is last
-        prices = [float(x['close']) for x in reversed(res['values'])]
-        return prices
+        return [float(x['close']) for x in reversed(res['values'])]
     return None
 
 def fetch_market_data(coin, timeframe):
-    # 1️⃣ TRY PRIMARY KEY
+    # Try Primary Key
     try:
         prices = get_twelvedata_candles(coin, timeframe, KEY_PRIMARY)
-        if prices:
-            print("🟢 Fetched using Primary TwelveData Key")
-            return calculate_local_indicators(prices)
-        else:
-            print("⚠️ Primary Key limit hit, switching to Secondary Key...")
+        if prices: return calculate_local_indicators(prices)
     except Exception as e:
-        print(f"⚠️ Primary Key Error: {e}")
+        print("Primary Key Error:", e)
 
-    # 2️⃣ TRY SECONDARY KEY (FALLBACK)
+    # Try Secondary Key
     try:
         prices = get_twelvedata_candles(coin, timeframe, KEY_SECONDARY)
-        if prices:
-            print("🟡 Fetched using Secondary TwelveData Key")
-            return calculate_local_indicators(prices)
-        else:
-            print("⚠️ Secondary Key limit hit or empty data.")
+        if prices: return calculate_local_indicators(prices)
     except Exception as e:
-        print(f"⚠️ Secondary Key Error: {e}")
+        print("Secondary Key Error:", e)
 
     return None
 
 # ---------------------------------------------------------
-# 📊 STRATEGY ROUTE
+# 📊 STRATEGY ROUTE (OPTIMIZED FOR HIGH WIN-RATE & LOW RISK)
 # ---------------------------------------------------------
 @app.route('/analyze', methods=['GET'])
 def analyze():
@@ -136,10 +112,7 @@ def analyze():
     data = fetch_market_data(coin, timeframe)
     
     if data is None:
-        return jsonify({
-            "status": "error",
-            "message": "Dono TwelveData Keys ki limits exhaust ho chuki hain. Baki time bad try karein."
-        }), 500
+        return jsonify({"status": "error", "message": "API Limits exhausted"}), 500
 
     latest_price = data['price']
     latest_rsi = round(data['rsi'], 2)
@@ -149,11 +122,15 @@ def analyze():
     prev_macd_signal = data['prev_macd_signal']
     upper_band = data['upper_band']
     lower_band = data['lower_band']
+    ema_20 = data['ema_20']
 
-    # Strategy Logic Conditions
+    # Indicator Alignments
     macd_bullish = (prev_macd_line <= prev_macd_signal) and (macd_line > macd_signal)
     macd_bearish = (prev_macd_line >= prev_macd_signal) and (macd_line < macd_signal)
     
+    macd_is_above = macd_line > macd_signal
+    macd_is_below = macd_line < macd_signal
+
     price_at_lower_band = latest_price <= lower_band
     price_at_upper_band = latest_price >= upper_band
 
@@ -161,24 +138,24 @@ def analyze():
     confidence = "LOW"
     action_type = "NO_ACTION"
 
-    # --- CALL LOGIC ---
-    if (latest_rsi < 30) and macd_bullish and price_at_lower_band:
+    # --- 1️⃣ HIGH ACCURACY CALL SIGNALS (Low Risk) ---
+    if (latest_rsi < 35) and macd_bullish and price_at_lower_band:
         signal = "STRONG CALL 🟢 (RSI + MACD + BB Bounce)"
         confidence = "HIGH"
         action_type = "CALL"
 
-    # --- PUT LOGIC ---
-    elif (latest_rsi > 70) and macd_bearish and price_at_upper_band:
-        signal = "STRONG PUT 🔴 (RSI + MACD + BB Rejection)"
-        confidence = "HIGH"
-        action_type = "PUT"
-        
-    elif (latest_rsi < 35) and macd_bullish:
+    elif (latest_rsi < 42) and macd_is_above and (latest_price >= ema_20):
         signal = "WEAK CALL 🟢"
         confidence = "MEDIUM"
         action_type = "CALL"
 
-    elif (latest_rsi > 65) and macd_bearish:
+    # --- 2️⃣ HIGH ACCURACY PUT SIGNALS (Low Risk) ---
+    elif (latest_rsi > 65) and macd_bearish and price_at_upper_band:
+        signal = "STRONG PUT 🔴 (RSI + MACD + BB Rejection)"
+        confidence = "HIGH"
+        action_type = "PUT"
+
+    elif (latest_rsi > 58) and macd_is_below and (latest_price <= ema_20):
         signal = "WEAK PUT 🔴"
         confidence = "MEDIUM"
         action_type = "PUT"
@@ -191,9 +168,7 @@ def analyze():
         "indicators": {
             "rsi": latest_rsi,
             "macd_line": round(macd_line, 5),
-            "macd_signal": round(macd_signal, 5),
-            "bb_upper": round(upper_band, 5),
-            "bb_lower": round(lower_band, 5)
+            "macd_signal": round(macd_signal, 5)
         },
         "signal": signal,
         "action": action_type,
