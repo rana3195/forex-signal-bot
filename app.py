@@ -1,36 +1,91 @@
 import os
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)  # Browser extensions aur TradingView/Quotex requests bypass karne ke liye
+CORS(app)
+
+# ---------------------------------------------------------
+# TWELVE DATA API KEYS (BOTH ARE WORKING 🟢)
+# ---------------------------------------------------------
+TWELVE_DATA_KEY_1 = "a592dba7321442efa229bee2b8a1cff8"
+TWELVE_DATA_KEY_2 = "5f98e9f032684d27b8b266656bfcadac"
+
+def fetch_market_data(symbol, api_key, source_name):
+    """ Helper function to fetch live data from Twelve Data """
+    try:
+        # Convert symbol format just in case (e.g., OANDA:EUR_USD -> EUR/USD)
+        clean_symbol = symbol.replace("OANDA:", "").replace("_", "/")
+        url = f"https://api.twelvedata.com/quote?symbol={clean_symbol}&apikey={api_key}"
+        res = requests.get(url, timeout=3)
+        
+        if res.status_code == 200:
+            data = res.json()
+            # Strict check if data actually exists and not an API limit message
+            if 'close' in data and float(data.get('close', 0)) > 0:
+                return {
+                    "price": float(data['close']),
+                    "high": float(data['high']),
+                    "low": float(data['low']),
+                    "source": source_name
+                }
+    except Exception as e:
+        print(f"Error fetching from {source_name}: {e}")
+    return None
 
 @app.route('/')
 def home():
-    return "Forex Strategy Backend Running Perfectly 🚀"
+    return "Dual Twelve Data Signal Engine Active 🚀"
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
     try:
-        data = request.json or {}
+        payload = request.json or {}
+        symbol = payload.get('coin', 'EUR/USD')
+        timeframe = payload.get('timeframe', '1m')
+
+        # ---------------------------------------------------------
+        # 1. DUAL TWELVE DATA FAILOVER SYSTEM
+        # ---------------------------------------------------------
+        # Attempt 1: Using the First Twelve Data Key
+        market_data = fetch_market_data(symbol, TWELVE_DATA_KEY_1, "Twelve Data (Key 1) 🟢")
         
-        # Extract Incoming Technical Data
-        coin = data.get('coin', 'EUR/USD')
-        timeframe = data.get('timeframe', '1m')
-        price = float(data.get('price', 0.0))
-        rsi = float(data.get('rsi', 50.0))
-        atr = float(data.get('atr', 0.0005))
+        # Attempt 2: Fallback to the Second Twelve Data Key if Key 1 limits out
+        if not market_data:
+            market_data = fetch_market_data(symbol, TWELVE_DATA_KEY_2, "Twelve Data (Key 2) 🔵")
+
+        # IF BOTH KEYS FAIL -> ABSOLUTE ERROR RESPONSE (NO FAKE PAYLOAD)
+        if not market_data:
+            return jsonify({
+                "status": "error",
+                "signal": "ERROR ❌",
+                "action": "NO_ACTION",
+                "message": "Both Twelve Data API Keys hit their rate limits. Trade blocked for safety!"
+            }), 429
+
+        # Extract live values from the active key
+        price = market_data['price']
+        recent_high = market_data['high']
+        recent_low = market_data['low']
+        source = market_data['source']
+
+        # Extract strategy indicators sent by your extension
+        rsi = float(payload.get('rsi', 50.0))
+        atr = float(payload.get('atr', 0.0005))
+        ema_20 = float(payload.get('ema_20', 0.0))
+        ema_50 = float(payload.get('ema_50', 0.0))
+        macd_line = float(payload.get('macd_line', 0.0))
+        macd_signal = float(payload.get('macd_signal', 0.0))
         
         buy_score = 0
         sell_score = 0
         reasons = []
 
         # ---------------------------------------------------------
-        # 1. EMA Trend Filter (25 Points)
+        # 2. CONFLUENCE STRATEGY EVALUATION
         # ---------------------------------------------------------
-        ema_20 = float(data.get('ema_20', 0.0))
-        ema_50 = float(data.get('ema_50', 0.0))
-        
+        # EMA Trend (25 Points)
         if ema_20 > ema_50:
             buy_score += 25
             reasons.append("EMA Bullish Trend")
@@ -38,12 +93,7 @@ def analyze():
             sell_score += 25
             reasons.append("EMA Bearish Trend")
 
-        # ---------------------------------------------------------
-        # 2. MACD Momentum (20 Points)
-        # ---------------------------------------------------------
-        macd_line = float(data.get('macd_line', 0.0))
-        macd_signal = float(data.get('macd_signal', 0.0))
-        
+        # MACD Crossover (20 Points)
         if macd_line > macd_signal:
             buy_score += 20
             reasons.append("MACD Bullish Cross")
@@ -51,43 +101,32 @@ def analyze():
             sell_score += 20
             reasons.append("MACD Bearish Cross")
 
-        # ---------------------------------------------------------
-        # 3. RSI Direction & Boundary (15 Points)
-        # ---------------------------------------------------------
+        # RSI Momentum (15 Points)
         if rsi >= 55:
             buy_score += 15
-            reasons.append("RSI Bullish (>55)")
+            reasons.append("RSI Momentum (>55)")
         elif rsi <= 45:
             sell_score += 15
             reasons.append("RSI Bearish (<45)")
 
-        # ---------------------------------------------------------
-        # 4. Support & Resistance Rejection (15 Points)
-        # ---------------------------------------------------------
-        recent_low = float(data.get('recent_low', price))
-        recent_high = float(data.get('recent_high', price))
-        
+        # Real-Time Support / Resistance Bounce (15 Points)
         if price <= (recent_low * 1.0005):
             buy_score += 15
-            reasons.append("Support Level Rejection")
+            reasons.append("At Real-Time Support")
         elif price >= (recent_high * 0.9995):
             sell_score += 15
-            reasons.append("Resistance Level Rejection")
+            reasons.append("At Real-Time Resistance")
 
-        # ---------------------------------------------------------
-        # 5. Candlestick Confirmation (10 Points)
-        # ---------------------------------------------------------
-        if data.get('bullish_pattern'):
+        # Candlestick Price Action Patterns (10 Points)
+        if payload.get('bullish_pattern'):
             buy_score += 10
             reasons.append("Bullish Price Action")
-        elif data.get('bearish_pattern'):
+        elif payload.get('bearish_pattern'):
             sell_score += 10
             reasons.append("Bearish Price Action")
 
-        # ---------------------------------------------------------
-        # 6. Directional Volume Spike Boost (15 Points - Fixed Logic)
-        # ---------------------------------------------------------
-        if data.get('vol_spike'):
+        # Directional Volume Spike Boost (15 Points)
+        if payload.get('vol_spike'):
             if buy_score > sell_score:
                 buy_score += 15
                 reasons.append("Bullish Volume Surge")
@@ -96,17 +135,7 @@ def analyze():
                 reasons.append("Bearish Volume Surge")
 
         # ---------------------------------------------------------
-        # 7. ADX Strong Trend Booster (>18)
-        # ---------------------------------------------------------
-        adx = float(data.get('adx', 0.0))
-        if adx > 18:
-            if buy_score > sell_score:
-                buy_score = min(buy_score + 5, 100)
-            elif sell_score > buy_score:
-                sell_score = min(sell_score + 5, 100)
-
-        # ---------------------------------------------------------
-        # HIGH ACCURACY DECISION ENGINE (Only Strong Signals)
+        # 3. HIGH PRECISION DECISION ENGINE (Cut-off >= 65%)
         # ---------------------------------------------------------
         signal = "WAIT 🟡"
         action_type = "NO_ACTION"
@@ -114,7 +143,6 @@ def analyze():
         tp = price
         sl = price
 
-        # Strictly filter out weak/medium signals (Cut-off >= 65%)
         if buy_score >= 65 and buy_score > sell_score:
             signal = "STRONG BUY 🟢"
             action_type = "CALL"
@@ -129,7 +157,8 @@ def analyze():
 
         return jsonify({
             "status": "success",
-            "coin": coin,
+            "data_source": source,
+            "coin": symbol,
             "timeframe": timeframe,
             "entry_price": round(price, 5),
             "signal": signal,
@@ -137,13 +166,13 @@ def analyze():
             "confidence": f"{confidence}%",
             "take_profit": tp,
             "stop_loss": sl,
-            "reason": " + ".join(reasons[:3]) if reasons else "Waiting for High Probability Confluence"
+            "reason": " + ".join(reasons[:3]) if reasons else "Waiting for High Confluence"
         })
 
     except Exception as e:
         return jsonify({
             "status": "error",
-            "signal": "WAIT 🟡",
+            "signal": "ERROR ❌",
             "action": "NO_ACTION",
             "message": str(e)
         }), 500
